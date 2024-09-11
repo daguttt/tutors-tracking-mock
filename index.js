@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { Client } from '@notionhq/client';
+import { format } from '@formkit/tempo';
 
 const notionCl = new Client({
   auth: process.env.NOTION_KEY,
@@ -9,6 +10,8 @@ const notionCl = new Client({
 // const TUTORS_DB_ID = process.env.NOTION_TUTORS_DATABASE_ID;
 const TEAM_LEADERS_DB_ID = process.env.NOTION_TEAM_LEADERS_DATABASE_ID;
 const TUTORS_TRACKING_DB_ID = process.env.NOTION_TUTORS_TRACKING_DATABASE_ID;
+const PAGE_DAILY_WAGE_TUTORS_CONSTANT_ID =
+  process.env.NOTION_DAILY_WAGE_TUTORS_CONSTANT_PAGE_ID;
 
 async function main() {
   // // Retrieve a specific page info
@@ -58,27 +61,36 @@ async function main() {
     },
   });
 
-  console.log();
-  console.log(teampLeadersDbQueryResponse);
-  console.log();
+  // console.log();
+  // console.log({ teampLeadersDbQueryResponse });
+  // console.log();
 
   // Create a tutor tracking record for each team leader and their assigned tutors
-  (async () => {
-    const teamLeaderPages = teampLeadersDbQueryResponse.results;
-    for (const teamLeadesPage of teamLeaderPages) {
-      const {
-        'Assigned Tutors': { relation: assignedTutorPageReferences },
-      } = teamLeadesPage.properties;
+  const teamLeaderPages = teampLeadersDbQueryResponse.results;
+  for (const teamLeaderPage of teamLeaderPages) {
+    const {
+      'Assigned Tutors': { relation: assignedTutorPageReferences },
+    } = teamLeaderPage.properties;
 
-      for (const assignedTutorPageReference of assignedTutorPageReferences) {
-        await createTutorTrackingPage({
-          teamLeaderPageId: teamLeadesPage.id,
-          tutorPageId: assignedTutorPageReference.id,
-          date: new Date(),
-        });
-      }
+    const teamLeaderPageTitle = await getPageTitleProperty(teamLeaderPage.id);
+    console.log('*------------------*');
+    console.log('Team Leader: ' + teamLeaderPageTitle);
+
+    for (const assignedTutorPageReference of assignedTutorPageReferences) {
+      const assignedTutorPageTitle = await getPageTitleProperty(
+        assignedTutorPageReference.id
+      );
+      console.log(
+        'Creating tracking record for tutor: ' + assignedTutorPageTitle
+      );
+      await createTutorTrackingPage({
+        teamLeaderPageId: teamLeaderPage.id,
+        tutorPageId: assignedTutorPageReference.id,
+        date: new Date(), // TODO: Change this to be dynamic
+      });
     }
-  })();
+    console.log('*------------------*');
+  }
 }
 
 main();
@@ -94,27 +106,80 @@ async function createTutorTrackingPage({
 }) {
   await notionCl.pages.create({
     parent: {
+      type: 'database_id',
       database_id: TUTORS_TRACKING_DB_ID,
     },
+    icon: {
+      type: 'external',
+      external: {
+        url: 'https://www.notion.so/icons/target_gray.svg?mode=light',
+      },
+    },
     properties: {
-      'Team Leader': {
-        type: 'relation',
-        relation: {
-          id: teamLeaderPageId,
-        },
-      },
-      Tutor: {
-        type: 'relation',
-        relation: {
-          id: tutorPageId,
-        },
-      },
       Date: {
         type: 'date',
         date: {
-          start: date.toISOString(),
+          start: format(date, 'YYYY-MM-DD'),
         },
+      },
+      Day: {
+        type: 'title',
+        title: [
+          {
+            type: 'text',
+            text: {
+              content: '[BOT] Day ',
+            },
+          },
+          {
+            type: 'mention',
+            mention: {
+              type: 'date',
+              date: {
+                start: format(date, 'YYYY-MM-DD'),
+                end: null,
+              },
+            },
+          },
+        ],
+      },
+      'Team Leader': {
+        type: 'relation',
+        relation: [
+          {
+            id: teamLeaderPageId,
+          },
+        ],
+      },
+      Tutor: {
+        type: 'relation',
+        relation: [
+          {
+            id: tutorPageId,
+          },
+        ],
+      },
+      'Constants DB': {
+        type: 'relation',
+        relation: [
+          {
+            id: PAGE_DAILY_WAGE_TUTORS_CONSTANT_ID,
+          },
+        ],
       },
     },
   });
+}
+
+/**
+ *
+ * @param {string} pageId
+ * @returns {Promise<string>}
+ */
+async function getPageTitleProperty(pageId) {
+  const pageTitlePropertyResponse = await notionCl.pages.properties.retrieve({
+    page_id: pageId,
+    property_id: 'title',
+  });
+  return pageTitlePropertyResponse.results[0].title.text.content;
 }
